@@ -1,110 +1,292 @@
 import TelegramBot from "node-telegram-bot-api";
 import Groq from "groq-sdk";
-
 import dotenv from "dotenv";
 import fs from "node:fs";
 import path from "node:path";
 
 dotenv.config();
 
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN!, {
+const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const GROQ_KEY = process.env.GROQ_API_KEY;
+
+if (!TELEGRAM_TOKEN || !GROQ_KEY) {
+  throw new Error(
+    "Missing TELEGRAM_BOT_TOKEN or GROQ_API_KEY"
+  );
+}
+
+const bot = new TelegramBot(TELEGRAM_TOKEN, {
   polling: true,
 });
 
 const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
+  apiKey: GROQ_KEY,
 });
 
-const DOWNLOAD_DIR = "./downloads";
+const DOWNLOAD_DIR = path.resolve("./downloads");
 
 fs.mkdirSync(DOWNLOAD_DIR, {
   recursive: true,
 });
 
-async function transcribe(filePath: string): Promise<string> {
-  const result = await groq.audio.transcriptions.create({
-    file: fs.createReadStream(filePath),
-    model: "whisper-large-v3",
-  });
+
+async function downloadTelegramAudio(
+  fileId: string,
+  extension: string
+): Promise<string> {
+
+  const tempPath = await bot.downloadFile(
+    fileId,
+    DOWNLOAD_DIR
+  );
+
+  const finalPath = `${tempPath}.${extension}`;
+
+  fs.renameSync(
+    tempPath,
+    finalPath
+  );
+
+  return finalPath;
+}
+
+
+async function transcribeAudio(
+  filePath: string
+): Promise<string> {
+
+  const result =
+    await groq.audio.transcriptions.create({
+      file: fs.createReadStream(filePath),
+      model: "whisper-large-v3",
+      response_format: "json",
+    });
+
   return result.text;
 }
 
-async function summarize(text: string): Promise<string> {
-  const response = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
-    messages: [
-      {
-        role: "system",
-        content:
-          "Summarize the text in 1-3 short bullet points.",
-      },
-      {
-        role: "user",
-        content: text,
-      },
-    ],
-  });
 
-  return response.choices[0].message.content ?? "";
+async function summarizeText(
+  text: string
+): Promise<string> {
+
+  const response =
+    await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+
+      messages: [
+        {
+          role: "system",
+          content:
+            "Summarize the conversation in 2-3 short bullet points. Keep only important information.",
+        },
+        {
+          role: "user",
+          content: text,
+        },
+      ],
+
+      temperature: 0.3,
+    });
+
+
+  return (
+    response.choices[0]
+      ?.message
+      ?.content
+      ?.trim()
+    ||
+    "No summary generated."
+  );
 }
 
-async function processAudio(
-  fileId: string,
-  chatId: number,
-  messageId: number
+
+async function processVoiceMessage(
+  msg: TelegramBot.Message
 ) {
-  let localPath: string | undefined;
+
+  if (!msg.voice) {
+    return;
+  }
+
+  const chatId = msg.chat.id;
+
+  let audioPath: string | undefined;
+
 
   try {
-    await bot.sendChatAction(chatId, "typing");
 
-    const downloadedPath = await bot.downloadFile(
-      fileId,
-      DOWNLOAD_DIR
+    await bot.sendChatAction(
+      chatId,
+      "typing"
     );
-    
-    localPath = `${downloadedPath}.ogg`;
-    
-    fs.renameSync(downloadedPath, localPath);
 
-    const transcript = await transcribe(localPath);
 
-    const summary = await summarize(transcript);
+    audioPath =
+      await downloadTelegramAudio(
+        msg.voice.file_id,
+        "ogg"
+      );
 
-    await bot.sendMessage(chatId, `📝 Summary\n\n${summary}`, {
-      reply_to_message_id: messageId,
-    });
+
+    const transcript =
+      await transcribeAudio(
+        audioPath
+      );
+
+
+    const summary =
+      await summarizeText(
+        transcript
+      );
+
+
+    await bot.sendMessage(
+      chatId,
+      `📝 Summary\n\n${summary}`,
+      {
+        reply_to_message_id:
+          msg.message_id,
+      }
+    );
+
+
   } catch (error) {
-    console.error(error);
 
-    await bot.sendMessage(chatId, "Failed to summarize audio.", {
-      reply_to_message_id: messageId,
-    });
+    console.error(
+      "Processing error:",
+      error
+    );
+
+
+    await bot.sendMessage(
+      chatId,
+      "❌ Failed to process audio.",
+      {
+        reply_to_message_id:
+          msg.message_id,
+      }
+    );
+
+
   } finally {
-    if (localPath && fs.existsSync(localPath)) {
-      fs.unlinkSync(localPath);
+
+    if (
+      audioPath &&
+      fs.existsSync(audioPath)
+    ) {
+      fs.unlinkSync(audioPath);
     }
+
   }
 }
 
-bot.on("voice", async (msg) => {
-  if (!msg.voice) return;
 
-  await processAudio(
-    msg.voice.file_id,
-    msg.chat.id,
-    msg.message_id
-  );
-});
+// Telegram voice messages
+bot.on(
+  "voice",
+  async (msg) => {
+    await processVoiceMessage(msg);
+  }
+);
 
-bot.on("audio", async (msg) => {
-  if (!msg.audio) return;
 
-  await processAudio(
-    msg.audio.file_id,
-    msg.chat.id,
-    msg.message_id
-  );
-});
+// Normal audio files (mp3, m4a, etc.)
+bot.on(
+  "audio",
+  async (msg) => {
 
-console.log("Bot is running...");
+    if (!msg.audio) {
+      return;
+    }
+
+    const chatId = msg.chat.id;
+
+    let audioPath: string | undefined;
+
+    try {
+
+      await bot.sendChatAction(
+        chatId,
+        "typing"
+      );
+
+
+      const extension =
+      msg.audio.mime_type?.split("/")[1] || "mp3";
+
+      audioPath =
+        await downloadTelegramAudio(
+          msg.audio.file_id,
+          extension
+        );
+
+
+      const transcript =
+        await transcribeAudio(
+          audioPath
+        );
+
+
+      const summary =
+        await summarizeText(
+          transcript
+        );
+
+
+      await bot.sendMessage(
+        chatId,
+        `📝 Summary\n\n${summary}`,
+        {
+          reply_to_message_id:
+            msg.message_id,
+        }
+      );
+
+
+    } catch (error) {
+
+      console.error(
+        "Audio processing error:",
+        error
+      );
+
+
+      await bot.sendMessage(
+        chatId,
+        "❌ Failed to process audio.",
+        {
+          reply_to_message_id:
+            msg.message_id,
+        }
+      );
+
+
+    } finally {
+
+      if (
+        audioPath &&
+        fs.existsSync(audioPath)
+      ) {
+        fs.unlinkSync(audioPath);
+      }
+
+    }
+  }
+);
+
+
+bot.on(
+  "polling_error",
+  (error) => {
+    console.error(
+      "Telegram polling error:",
+      error.message
+    );
+  }
+);
+
+
+console.log(
+  "Telegram audio summary bot running..."
+);
