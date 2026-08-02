@@ -58,7 +58,14 @@ async function processAudio(
   try {
     await bot.sendChatAction(chatId, "typing");
 
-    localPath = await bot.downloadFile(fileId, DOWNLOAD_DIR);
+    const downloadedPath = await bot.downloadFile(
+      fileId,
+      DOWNLOAD_DIR
+    );
+    
+    localPath = `${downloadedPath}.ogg`;
+    
+    fs.renameSync(downloadedPath, localPath);
 
     const transcript = await transcribe(localPath);
 
