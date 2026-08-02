@@ -45,6 +45,7 @@ async function transcribeAudio(filePath: string): Promise<string> {
     file: fs.createReadStream(filePath),
     model: "whisper-large-v3",
     response_format: "json",
+    language: "ru"
   });
 
   return result.text;
@@ -57,18 +58,7 @@ async function summarizeText(text: string): Promise<string> {
     messages: [
       {
         role: "system",
-        content: `
-You are an assistant that summarizes spoken audio.
-
-Always respond in Russian, regardless of the language of the audio.
-
-Requirements:
-- Output only in Russian.
-- Use 2–3 short bullet points.
-- Preserve names, numbers, dates and times.
-- Do not invent information.
-- Do not include introductions or conclusions.
-`.trim(),
+        content: `Всегда отвечай только на русском языке. Кратко суммируй текст в 2–3 пунктах. Не выдумывай информацию.`.trim(),
       },
       {
         role: "user",
