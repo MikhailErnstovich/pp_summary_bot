@@ -45,7 +45,7 @@ async function transcribeAudio(filePath: string): Promise<string> {
     file: fs.createReadStream(filePath),
     model: "whisper-large-v3",
     response_format: "json",
-    language: "ru"
+    language: "ru",
   });
 
   return result.text;
@@ -55,24 +55,37 @@ async function summarizeText(text: string): Promise<string> {
   const response = await groq.chat.completions.create({
     model: "llama-3.3-70b-versatile",
 
+    temperature: 0,
+
     messages: [
       {
         role: "system",
-        content: `ВСЕ ОТВЕТЫ ДОЛЖНЫ БЫТЬ НА РУССКОМ ЯЗЫКЕ!!! Всегда отвечай только на русском языке. Кратко суммируй текст в 2–3 пунктах. Не выдумывай информацию.`.trim(),
+        content: `
+Ты работаешь как русскоязычный ассистент.
+
+Правила:
+1. Ответ ВСЕГДА только на русском языке.
+2. Никогда не отвечай на английском.
+3. Не цитируй исходный текст.
+4. Верни только краткое резюме.
+5. Формат ответа:
+- пункт 1
+- пункт 2
+- пункт 3
+
+Даже если входной текст написан на другом языке, результат должен быть на русском.
+        `.trim(),
       },
       {
         role: "user",
         content: text,
       },
     ],
-
-    temperature: 0.3,
   });
 
-  return (
-    response.choices[0]?.message?.content?.trim() || "No summary generated."
-  );
+  return response.choices[0]?.message?.content?.trim() ?? "Нет результата";
 }
+
 
 async function processVoiceMessage(msg: TelegramBot.Message) {
   if (!msg.voice) {
