@@ -1,5 +1,6 @@
 import TelegramBot from "node-telegram-bot-api";
-import OpenAI from "openai";
+import Groq from "groq-sdk";
+
 import dotenv from "dotenv";
 import fs from "node:fs";
 import path from "node:path";
@@ -10,8 +11,8 @@ const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN!, {
   polling: true,
 });
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
 });
 
 const DOWNLOAD_DIR = "./downloads";
@@ -21,22 +22,21 @@ fs.mkdirSync(DOWNLOAD_DIR, {
 });
 
 async function transcribe(filePath: string): Promise<string> {
-  const result = await openai.audio.transcriptions.create({
-    model: "gpt-4o-transcribe",
+  const result = await groq.audio.transcriptions.create({
     file: fs.createReadStream(filePath),
+    model: "whisper-large-v3",
   });
-
   return result.text;
 }
 
 async function summarize(text: string): Promise<string> {
-  const response = await openai.responses.create({
-    model: "gpt-5",
-    input: [
+  const response = await groq.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    messages: [
       {
         role: "system",
         content:
-          "Summarize the audio in 1-3 short bullet points. Keep it concise.",
+          "Summarize the text in 1-3 short bullet points.",
       },
       {
         role: "user",
@@ -45,7 +45,7 @@ async function summarize(text: string): Promise<string> {
     ],
   });
 
-  return response.output_text;
+  return response.choices[0].message.content ?? "";
 }
 
 async function processAudio(
