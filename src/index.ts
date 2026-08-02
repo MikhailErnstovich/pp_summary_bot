@@ -10,9 +10,7 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const GROQ_KEY = process.env.GROQ_API_KEY;
 
 if (!TELEGRAM_TOKEN || !GROQ_KEY) {
-  throw new Error(
-    "Missing TELEGRAM_BOT_TOKEN or GROQ_API_KEY"
-  );
+  throw new Error("Missing TELEGRAM_BOT_TOKEN or GROQ_API_KEY");
 }
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, {
@@ -29,82 +27,64 @@ fs.mkdirSync(DOWNLOAD_DIR, {
   recursive: true,
 });
 
-
 async function downloadTelegramAudio(
   fileId: string,
   extension: string
 ): Promise<string> {
-
-  const tempPath = await bot.downloadFile(
-    fileId,
-    DOWNLOAD_DIR
-  );
+  const tempPath = await bot.downloadFile(fileId, DOWNLOAD_DIR);
 
   const finalPath = `${tempPath}.${extension}`;
 
-  fs.renameSync(
-    tempPath,
-    finalPath
-  );
+  fs.renameSync(tempPath, finalPath);
 
   return finalPath;
 }
 
-
-async function transcribeAudio(
-  filePath: string
-): Promise<string> {
-
-  const result =
-    await groq.audio.transcriptions.create({
-      file: fs.createReadStream(filePath),
-      model: "whisper-large-v3",
-      response_format: "json",
-    });
+async function transcribeAudio(filePath: string): Promise<string> {
+  const result = await groq.audio.transcriptions.create({
+    file: fs.createReadStream(filePath),
+    model: "whisper-large-v3",
+    response_format: "json",
+  });
 
   return result.text;
 }
 
+async function summarizeText(text: string): Promise<string> {
+  const response = await groq.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
 
-async function summarizeText(
-  text: string
-): Promise<string> {
+    messages: [
+      {
+        role: "system",
+        content: `
+You are an assistant that summarizes spoken audio.
 
-  const response =
-    await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
+Always respond in Russian, regardless of the language of the audio.
 
-      messages: [
-        {
-          role: "system",
-          content:
-            "Summarize the conversation in 2-3 short bullet points. Keep only important information.",
-        },
-        {
-          role: "user",
-          content: text,
-        },
-      ],
+Requirements:
+- Output only in Russian.
+- Use 2–3 short bullet points.
+- Preserve names, numbers, dates and times.
+- Do not invent information.
+- Do not include introductions or conclusions.
+`.trim(),
+      },
+      {
+        role: "user",
+        content: text,
+      },
+    ],
 
-      temperature: 0.3,
-    });
-
+    temperature: 0.3,
+  });
 
   return (
-    response.choices[0]
-      ?.message
-      ?.content
-      ?.trim()
-    ||
-    "No summary generated."
+    response.choices[0]?.message?.content?.trim() || "No summary generated."
   );
 }
 
-
-async function processVoiceMessage(
-  msg: TelegramBot.Message
-) {
-
+async function processVoiceMessage(msg: TelegramBot.Message) {
   if (!msg.voice) {
     return;
   }
@@ -113,180 +93,75 @@ async function processVoiceMessage(
 
   let audioPath: string | undefined;
 
-
   try {
+    await bot.sendChatAction(chatId, "typing");
 
-    await bot.sendChatAction(
-      chatId,
-      "typing"
-    );
+    audioPath = await downloadTelegramAudio(msg.voice.file_id, "ogg");
 
+    const transcript = await transcribeAudio(audioPath);
 
-    audioPath =
-      await downloadTelegramAudio(
-        msg.voice.file_id,
-        "ogg"
-      );
+    const summary = await summarizeText(transcript);
 
-
-    const transcript =
-      await transcribeAudio(
-        audioPath
-      );
-
-
-    const summary =
-      await summarizeText(
-        transcript
-      );
-
-
-    await bot.sendMessage(
-      chatId,
-      `📝 Summary\n\n${summary}`,
-      {
-        reply_to_message_id:
-          msg.message_id,
-      }
-    );
-
-
+    await bot.sendMessage(chatId, `📝 Summary\n\n${summary}`, {
+      reply_to_message_id: msg.message_id,
+    });
   } catch (error) {
+    console.error("Processing error:", error);
 
-    console.error(
-      "Processing error:",
-      error
-    );
-
-
-    await bot.sendMessage(
-      chatId,
-      "❌ Failed to process audio.",
-      {
-        reply_to_message_id:
-          msg.message_id,
-      }
-    );
-
-
+    await bot.sendMessage(chatId, "❌ Failed to process audio.", {
+      reply_to_message_id: msg.message_id,
+    });
   } finally {
-
-    if (
-      audioPath &&
-      fs.existsSync(audioPath)
-    ) {
+    if (audioPath && fs.existsSync(audioPath)) {
       fs.unlinkSync(audioPath);
     }
-
   }
 }
 
-
 // Telegram voice messages
-bot.on(
-  "voice",
-  async (msg) => {
-    await processVoiceMessage(msg);
-  }
-);
-
+bot.on("voice", async (msg) => {
+  await processVoiceMessage(msg);
+});
 
 // Normal audio files (mp3, m4a, etc.)
-bot.on(
-  "audio",
-  async (msg) => {
+bot.on("audio", async (msg) => {
+  if (!msg.audio) {
+    return;
+  }
 
-    if (!msg.audio) {
-      return;
-    }
+  const chatId = msg.chat.id;
 
-    const chatId = msg.chat.id;
+  let audioPath: string | undefined;
 
-    let audioPath: string | undefined;
+  try {
+    await bot.sendChatAction(chatId, "typing");
 
-    try {
+    const extension = msg.audio.mime_type?.split("/")[1] || "mp3";
 
-      await bot.sendChatAction(
-        chatId,
-        "typing"
-      );
+    audioPath = await downloadTelegramAudio(msg.audio.file_id, extension);
 
+    const transcript = await transcribeAudio(audioPath);
 
-      const extension =
-      msg.audio.mime_type?.split("/")[1] || "mp3";
+    const summary = await summarizeText(transcript);
 
-      audioPath =
-        await downloadTelegramAudio(
-          msg.audio.file_id,
-          extension
-        );
+    await bot.sendMessage(chatId, `📝 Summary\n\n${summary}`, {
+      reply_to_message_id: msg.message_id,
+    });
+  } catch (error) {
+    console.error("Audio processing error:", error);
 
-
-      const transcript =
-        await transcribeAudio(
-          audioPath
-        );
-
-
-      const summary =
-        await summarizeText(
-          transcript
-        );
-
-
-      await bot.sendMessage(
-        chatId,
-        `📝 Summary\n\n${summary}`,
-        {
-          reply_to_message_id:
-            msg.message_id,
-        }
-      );
-
-
-    } catch (error) {
-
-      console.error(
-        "Audio processing error:",
-        error
-      );
-
-
-      await bot.sendMessage(
-        chatId,
-        "❌ Failed to process audio.",
-        {
-          reply_to_message_id:
-            msg.message_id,
-        }
-      );
-
-
-    } finally {
-
-      if (
-        audioPath &&
-        fs.existsSync(audioPath)
-      ) {
-        fs.unlinkSync(audioPath);
-      }
-
+    await bot.sendMessage(chatId, "❌ Failed to process audio.", {
+      reply_to_message_id: msg.message_id,
+    });
+  } finally {
+    if (audioPath && fs.existsSync(audioPath)) {
+      fs.unlinkSync(audioPath);
     }
   }
-);
+});
 
+bot.on("polling_error", (error) => {
+  console.error("Telegram polling error:", error.message);
+});
 
-bot.on(
-  "polling_error",
-  (error) => {
-    console.error(
-      "Telegram polling error:",
-      error.message
-    );
-  }
-);
-
-
-console.log(
-  "Telegram audio summary bot running..."
-);
+console.log("Telegram audio summary bot running...");
