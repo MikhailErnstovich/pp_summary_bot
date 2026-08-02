@@ -72,7 +72,9 @@ async function summarizeText(text: string): Promise<string> {
 - пункт 1
 - пункт 2
 - пункт 3
-
+...
+- пункт 10
+6. Не выдумывай информацию, которой нет в записи.
 Даже если входной текст написан на другом языке, результат должен быть на русском.
         `.trim(),
       },
@@ -85,7 +87,6 @@ async function summarizeText(text: string): Promise<string> {
 
   return response.choices[0]?.message?.content?.trim() ?? "Нет результата";
 }
-
 
 async function processVoiceMessage(msg: TelegramBot.Message) {
   if (!msg.voice) {
